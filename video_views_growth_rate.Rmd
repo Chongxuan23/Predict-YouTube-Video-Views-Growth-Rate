@@ -1,0 +1,559 @@
+---
+title: "video_views_growth_rate"
+author: "Chongxuan Bi"
+date: "1/1/2021"
+output: pdf_document
+---
+
+# Load in Libraries
+
+```{r}
+library(ISLR)
+library(mclust)
+library(caret)
+library(tree)
+library(rattle)
+library(randomForest)
+library(readr)
+library(glmnet)
+library(gbm)
+library(rpart)
+library(leaps)
+library(pls)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+```
+
+# Read in Data
+
+```{r}
+training <- read_csv("training.csv")
+testing <- read_csv("test.csv")
+```
+
+# Preprocessing
+
+## Combine Binary Variables in Training
+
+```{r}
+training$avg_growth = c(rep(0,nrow(training)))
+training$Num_Views_Base = c(rep(0,nrow(training)))
+training$Num_Subscribers_Base = c(rep(0,nrow(training)))
+training$count_vids = c(rep(0,nrow(training)))
+for (i in 1:nrow(training)) {
+  if(training$avg_growth_low[i] == 1){
+    training$avg_growth[i] = 1
+  } else if (training$avg_growth_low_mid[i] == 1){
+    training$avg_growth[i] = 2
+  }else if (training$avg_growth_mid_high[i] == 1){
+    training$avg_growth[i] = 3
+  }
+  
+  if(training$Num_Views_Base_low[i] == 1){
+    training$Num_Views_Base[i] = 1
+  } else if (training$Num_Views_Base_low_mid[i] == 1){
+    training$Num_Views_Base[i] = 2
+  }else if (training$Num_Views_Base_mid_high[i] == 1){
+    training$Num_Views_Base[i] = 3
+  }
+  
+  if(training$Num_Subscribers_Base_low[i] == 1){
+    training$Num_Subscribers_Base[i] = 1
+  } else if (training$Num_Subscribers_Base_low_mid[i] == 1){
+    training$Num_Subscribers_Base[i] = 2
+  }else if (training$Num_Subscribers_Base_mid_high[i] == 1){
+    training$Num_Subscribers_Base[i] = 3
+  }
+  
+  if(training$count_vids_low[i] == 1){
+    training$count_vids[i] = 1
+  } else if (training$count_vids_low_mid[i] == 1){
+    training$count_vids[i] = 2
+  }else if (training$count_vids_mid_high[i] == 1){
+    training$count_vids[i] = 3
+  }
+}
+training$avg_growth = factor(training$avg_growth)
+training$Num_Views_Base = factor(training$Num_Views_Base)
+training$Num_Subscribers_Base = factor(training$Num_Subscribers_Base)
+training$count_vids = factor(training$count_vids)
+```
+
+## Combine Binary Variables in Testing
+
+```{r}
+testing$'avg_growth' = c(rep(0,nrow(testing)))
+testing$'Num_Views_Base' = c(rep(0,nrow(testing)))
+testing$'Num_Subscribers_Base' = c(rep(0,nrow(testing)))
+testing$'count_vids' = c(rep(0,nrow(testing)))
+for (i in 1:nrow(testing)) {
+  if(testing$avg_growth_low[i] == 1){
+    testing$avg_growth[i] = 1
+  } else if (testing$avg_growth_low_mid[i] == 1){
+    testing$avg_growth[i] = 2
+  }else if (testing$avg_growth_mid_high[i] == 1){
+    testing$avg_growth[i] = 3
+  }
+  
+  if(testing$Num_Views_Base_low[i] == 1){
+    testing$Num_Views_Base[i] = 1
+  } else if (testing$Num_Views_Base_low_mid[i] == 1){
+    testing$Num_Views_Base[i] = 2
+  }else if (testing$Num_Views_Base_mid_high[i] == 1){
+    testing$Num_Views_Base[i] = 3
+  }
+  
+  if(testing$Num_Subscribers_Base_low[i] == 1){
+    testing$Num_Subscribers_Base[i] = 1
+  } else if (testing$Num_Subscribers_Base_low_mid[i] == 1){
+    testing$Num_Subscribers_Base[i] = 2
+  }else if (testing$Num_Subscribers_Base_mid_high[i] == 1){
+    testing$Num_Subscribers_Base[i] = 3
+  }
+  
+  if(testing$count_vids_low[i] == 1){
+    testing$count_vids[i] = 1
+  } else if (testing$count_vids_low_mid[i] == 1){
+    testing$count_vids[i] = 2
+  }else if (testing$count_vids_mid_high[i] == 1){
+    testing$count_vids[i] = 3
+  }
+}
+testing$avg_growth = factor(testing$avg_growth)
+testing$Num_Views_Base = factor(testing$Num_Views_Base)
+testing$Num_Subscribers_Base = factor(testing$Num_Subscribers_Base)
+testing$count_vids = factor(testing$count_vids)
+```
+
+## Training Date Split
+
+```{r}
+date = str_extract(training$PublishedDate, '[0-9]+[/][0-9]+[/][0-9]+')
+date = as.Date(date, '%m/%d/%y')
+dow = factor(weekdays(date)) # day of week
+hour = as.integer(str_match(training$PublishedDate, '([0-9]+):')[,2])
+qod = (hour %/% 4) + 1 # Part of day. 0-4 = 1, 4-8 = 2, 8-12 = 3 etc.
+qod = factor(qod)
+month = factor(str_match(training$PublishedDate, '([0-9]+)[/][0-9]+[/][0-9]+')[,2])
+
+training$dow = dow
+training$qod = qod
+training$month = month
+```
+
+## Testing Date Split
+
+```{r}
+date = str_extract(testing$PublishedDate, '[0-9]+[/][0-9]+[/][0-9]+')
+date = as.Date(date, '%m/%d/%y')
+dow = factor(weekdays(date))
+hour = as.integer(str_match(testing$PublishedDate, '([0-9]+):')[,2])
+qod = (hour %/% 4) + 1
+qod = factor(qod)
+month = factor(str_match(testing$PublishedDate, '([0-9]+)[/][0-9]+[/][0-9]+')[,2])
+
+testing$dow = dow
+testing$qod = qod
+testing$month = month
+```
+
+## Train/Validation Split
+
+```{r}
+set.seed(1)
+trainIndex <- createDataPartition(training$growth_2_6, p = 0.7, list = FALSE) 
+train <- training[trainIndex, ]
+valid <- training[-trainIndex, ]
+
+```
+
+## Delete Unrelated Variables/No Variation Columns in Training
+
+```{r}
+train_control <- trainControl(method="cv", number = 10) 
+# Delete no variation columns 
+reduced_train = train[,-c(1, 2)]
+reduced_train = reduced_train[,-c(which(colnames(reduced_train) == "max_red"),
+                                  which(colnames(reduced_train) == "min_red"),
+                                  which(colnames(reduced_train) == "max_green"),
+                                  which(colnames(reduced_train) == "min_green"),
+                                  which(colnames(reduced_train) == "max_blue"),
+                                  which(colnames(reduced_train) == "min_blue"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_low"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_low_mid"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_mid_high"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_low"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_low_mid"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_mid_high"),
+                                  which(colnames(reduced_train) == "avg_growth_low"),
+                                  which(colnames(reduced_train) == "avg_growth_low_mid"),
+                                  which(colnames(reduced_train) == "avg_growth_mid_high"),
+                                  which(colnames(reduced_train) == "count_vids_low"),
+                                  which(colnames(reduced_train) == "count_vids_low_mid"),
+                                  which(colnames(reduced_train) == "count_vids_mid_high"),
+                                  which(colnames(reduced_train) == "num_chars"),
+                                  
+                                  which(colnames(reduced_train) == "cnn_35"),
+                                  which(colnames(reduced_train) == "cnn_37"),
+                                  which(colnames(reduced_train) == "sd_red"),
+                                  which(colnames(reduced_train) == "sd_green"),
+                                  which(colnames(reduced_train) == "sd_blue"),
+                                  which(colnames(reduced_train) == "cnn_0"),
+                                  which(colnames(reduced_train) == "cnn_20"),
+                                  which(colnames(reduced_train) == "cnn_36"),
+                                  which(colnames(reduced_train) == "cnn_65"),
+                                  which(colnames(reduced_train) == "num_uppercase_words"))]
+# Remove all Hogs
+reduced_train = reduced_train[,-c(which(colnames(reduced_train) ==
+                              "hog_0"):which(colnames(reduced_train) == "hog_863"))]
+
+# Plot of some variables of little variation
+size = 5
+par(mfrow = c(3, 3))
+hist(train$max_blue, main = 'max_blue', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$max_red, main = 'max_red', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$max_green, main = 'max_blue', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$min_blue, xlim = c(-10, 10), main = 'min_blue', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$min_red, xlim = c(-10, 10), main = 'min_red', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$min_green, xlim = c(-10, 10), main = 'min_green', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$cnn_35, xlim = c(-10, 10), main = 'cnn_35', cex.main = size, xlab = NULL, ylab = NULL)
+hist(train$cnn_37, xlim = c(-10, 10), main = 'cnn_37', xlab = NULL, cex.main = size, ylab = NULL)
+hist(train$cnn_0, xlim = c(-10, 10), main = 'cnn_0', xlab = NULL, cex.main = size, ylab = NULL)
+
+```
+
+## Combine Punctuations in Training
+
+```{r}
+ex = which(colnames(reduced_train) == "punc_num_!")
+fenge = which(colnames(reduced_train) == "punc_num_~")
+reduced_train[,ex] = apply(reduced_train[,ex:fenge],1,sum)
+reduced_train = reduced_train[,-c((ex+1):fenge)]
+```
+
+## Delete Highly Correlated Variables in Training
+
+```{r}
+cor_mat <- cor(reduced_train[,c(1:45)])
+index = findCorrelation(cor_mat, 0.8)
+reduced_train = reduced_train[,-index]
+
+# Plot of correlation
+melted_cor_mat = melt(cor_mat)
+
+cor_heatmap = ggplot(data = melted_cor_mat, aes(x=Var1, y=Var2, fill=value)) + geom_tile()
+cor_heatmap = cor_heatmap +
+scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") + 
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1))
+
+cor_heatmap
+
+
+```
+
+# Apply Models
+
+## Backward Model Selection
+
+```{r}
+set.seed(1)
+backward_selection = regsubsets(growth_2_6 ~., data = reduced_train, method = 'backward', nvmax = 47)
+
+valid_mat = model.matrix(growth_2_6 ~., data = valid)
+scores = rep(NA, 47)
+for(i in 1:47){
+  coefi = coef(backward_selection, id = i)
+  pred = valid_mat[,names(coefi)] %*% coefi
+  scores[i] = sqrt(mean((pred - valid$growth_2_6)^2))
+}
+barplot(height = scores, names.arg = 1:47)
+
+rmse_back_selection = min(scores)
+```
+
+## Regularization
+
+```{r}
+reduced_valid = valid[,-c(1,2)]
+reduced_valid = reduced_valid[,-c(which(colnames(reduced_valid) == "max_red"),
+                                  which(colnames(reduced_valid) == "min_red"),
+                                  which(colnames(reduced_valid) == "max_green"),
+                                  which(colnames(reduced_valid) == "min_green"),
+                                  which(colnames(reduced_valid) == "max_blue"),
+                                  which(colnames(reduced_valid) == "min_blue"),
+                                  which(colnames(reduced_valid) == "Num_Subscribers_Base_low"),
+                                  which(colnames(reduced_valid) == "Num_Subscribers_Base_low_mid"),
+                                  which(colnames(reduced_valid) == "Num_Subscribers_Base_mid_high"),
+                                  which(colnames(reduced_valid) == "Num_Views_Base_low"),
+                                  which(colnames(reduced_valid) == "Num_Views_Base_low_mid"),
+                                  which(colnames(reduced_valid) == "Num_Views_Base_mid_high"),
+                                  which(colnames(reduced_valid) == "avg_growth_low"),
+                                  which(colnames(reduced_valid) == "avg_growth_low_mid"),
+                                  which(colnames(reduced_valid) == "avg_growth_mid_high"),
+                                  which(colnames(reduced_valid) == "count_vids_low"),
+                                  which(colnames(reduced_valid) == "count_vids_low_mid"),
+                                  which(colnames(reduced_valid) == "count_vids_mid_high"),
+                                  which(colnames(reduced_valid) == "num_chars"),
+
+                                  which(colnames(reduced_valid) == "cnn_35"),
+                                  which(colnames(reduced_valid) == "cnn_37"),
+                                  which(colnames(reduced_valid) == "sd_red"),
+                                  which(colnames(reduced_valid) == "sd_green"),
+                                  which(colnames(reduced_valid) == "sd_blue"),
+                                  which(colnames(reduced_valid) == "cnn_0"),
+                                  which(colnames(reduced_valid) == "cnn_20"),
+                                  which(colnames(reduced_valid) == "cnn_36"),
+                                  which(colnames(reduced_valid) == "cnn_65"),
+                                  which(colnames(reduced_valid) == "num_uppercase_words"))]
+# Remove all Hogs
+reduced_valid = reduced_valid[,-c(which(colnames(reduced_valid) == "hog_0"):which(colnames(reduced_valid) == "hog_863"))]
+reduced_valid[,ex] = apply(reduced_valid[,ex:fenge],1,sum)
+reduced_valid = reduced_valid[,-c((ex+1):fenge)]
+reduced_valid = reduced_valid[,-index]
+train_matrix <- model.matrix(growth_2_6 ~.,reduced_train)[,-which(colnames(reduced_train) == "growth_2_6")]
+valid_matrix <- model.matrix(growth_2_6 ~.,reduced_valid)[,-which(colnames(reduced_valid) == "growth_2_6")]
+train_y <- reduced_train$growth_2_6
+
+lasso <- glmnet(train_matrix, train_y,alpha = 1, standardize = TRUE)
+ridge = glmnet(train_matrix, train_y,alpha = 0, standardize = TRUE)
+pred_lasso <- predict(lasso, newx = valid_matrix)
+pred_ridge = predict(ridge, newx = valid_matrix)
+rmse_lasso = sqrt(mean((pred_lasso - valid$growth_2_6)^2))
+rmse_ridge = sqrt(mean((pred_ridge - valid$growth_2_6)^2))
+
+```
+
+## Principal Component Analysis
+
+```{r}
+pcr_model = pcr(growth_2_6 ~., data = reduced_train, scale = T, validation = 'CV')
+
+pred = predict(pcr_model, valid)
+
+rmse_pcr = sqrt(mean((pred - valid$growth_2_6)^2))
+```
+
+## Partial Least Squares
+
+```{r}
+pls_model = plsr(growth_2_6 ~., data = reduced_train, scale = T, validation = 'CV')
+
+pred = predict(pls_model, valid)
+
+rmse_pls = sqrt(mean((pred - valid$growth_2_6)^2))
+```
+
+
+## Bagging
+
+```{r}
+names(reduced_train) <- make.names(names(reduced_train))
+bagging <- randomForest(growth_2_6 ~., data = reduced_train,
+                   mtry = 47,
+                   ntree = 600, importance = TRUE)
+pred_bagging = predict(bagging, valid)
+rmse_bagging = sqrt(mean((pred_bagging - valid$growth_2_6)^2))
+```
+
+## Random Forest
+
+```{r}
+names(reduced_train) <- make.names(names(reduced_train))
+recommended.mtry <- 16
+rf <- randomForest(growth_2_6 ~., data = reduced_train,
+                   mtry = recommended.mtry,
+                   ntree = 600, importance = TRUE)
+pred_rf = predict(rf, valid)
+rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+
+# Plot importance of predictors
+imp = varImpPlot(rf)
+col_fun = colorRampPalette(c('red', 'blue'))
+cols = col_fun(10)
+barplot(sort(imp[,1], decreasing = T)[1:10], ylab = '%IncMSE', col = cols, main = NULL, names.arg = NULL)
+```
+
+
+## Boosting
+
+```{r}
+boost = gbm(growth_2_6~.,distribution = "gaussian",
+            data = reduced_train,n.trees = 700,
+            interaction.depth = 9,shrinkage = 0.03,
+            cv.folds = 6, n.cores = NULL,
+            verbose = F)
+pred_boost = predict(boost, valid)
+rmse_boost = sqrt(mean((pred_boost - valid$growth_2_6)^2))
+```
+
+## Comparing All Models
+
+```{r}
+rmses = c('back selection' = rmse_back_selection, 'bagging' = rmse_bagging, 'boost' = rmse_boost, 'lasso' = rmse_lasso, 'pcr' = rmse_pcr, 'pls' = rmse_pls, 'rf' = rmse_rf, 'ridge' = rmse_ridge)
+
+cols = col_fun(8)
+barplot(sort(rmses), names.arg = names(sort(rmses)), horiz = T, col = cols)
+```
+
+# Tuning
+
+```{r}
+# mtry
+mtry1 = c(15, 17, 19, 21, 23, 25, 27, 30, 33, 35)
+rsebest<-rep(0, len(mtry1))
+for(i in 1:len(mtry1)){
+  rf <- randomForest(growth_2_6 ~., data = train12, mtry = mtry1[i], ntree = 600, importance = TRUE)
+  pred_rf = predict(rf, valid)
+  rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+  rsebest[i] <- rmse_rf
+}
+plot(mtry1, rsebest, xlab = "mtry range",ylab = "RMSE",main = "mtry change in RMSE",cex.main = 1.6)
+
+# ntree for mtry=27
+ntree1 = c(500,550,600,650,700,750,800)
+rsebest1 <- rep(0,len(mtry1))
+for(i in 1:len(ntree1)){
+  rf <- randomForest(growth_2_6 ~., data = train12, mtry = 27, ntree = ntree[i],importance = TRUE)
+  pred_rf = predict(rf, valid)
+  rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+  rsebest1[i]<-rmse_rf
+}
+plot(ntree1, rsebest1, xlab = "mtry range",ylab = "RMSE",main="ntree change in RMSE",cex.main=1.6)
+
+# ntree for mtry=33
+ntree1=c(500,550,600,650,700,750,800)
+rsebest1<-rep(0,len(mtry1))
+for(i in 1:len(ntree1))
+{
+  rf <- randomForest(growth_2_6 ~., data = train12, mtry = 33, ntree = ntree[i], importance = TRUE)
+  pred_rf = predict(rf, valid)
+  rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+  rsebest1[i]<-rmse_rf
+}
+plot(ntree1, rsebest1, xlab = "mtry range",ylab = "RMSE",main = "ntree change in RMSE",cex.main = 1.6)
+
+# ntree for mtry=35
+ntree1=c(500,550,600,650,700,750,800)
+rsebest1 <- rep(0, len(mtry1))
+for(i in 1:len(ntree1)){
+  rf <- randomForest(growth_2_6 ~., data = train12, mtry = 35, ntree = ntree[i], importance = TRUE)
+  pred_rf = predict(rf, valid)
+  rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+  rsebest1[i]<-rmse_rf
+}
+plot(ntree,rsebest1, xlab = "mtry range",ylab = "RMSE",main="ntree change in RMSE",cex.main=1.6)
+
+# combination
+mtry4=matrix(c(27,600,30,600,33,800),ncol=2,byrow = T)
+rsebest1<-rep(0,3)
+for(i in 1:len(ntree1)){
+  rf <- randomForest(growth_2_6 ~., data = train12, mtry = mtry4[i,1], ntree = mtry4[i,2], importance = TRUE)
+  pred_rf = predict(rf, valid)
+  rmse_rf = sqrt(mean((pred_rf - valid$growth_2_6)^2))
+  rsebest1[i]<-rmse_rf
+}
+plot(c(1:3),rsebest)
+```
+
+# Fit the Model to Whole Training & Predict Testing Data
+
+```{r, eval=FALSE}
+set.seed(1)
+trainIndex <- createDataPartition(training$growth_2_6, p = 0.99, list = FALSE)
+train <- training[trainIndex, ]
+valid <- training[-trainIndex, ]
+
+reduced_train = train[,-c(1, 2)]
+reduced_train = reduced_train[,-c(which(colnames(reduced_train) == "max_red"),
+                                  which(colnames(reduced_train) == "min_red"),
+                                  which(colnames(reduced_train) == "max_green"),
+                                  which(colnames(reduced_train) == "min_green"),
+                                  which(colnames(reduced_train) == "max_blue"),
+                                  which(colnames(reduced_train) == "min_blue"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_low"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_low_mid"),
+                                  which(colnames(reduced_train) == "Num_Subscribers_Base_mid_high"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_low"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_low_mid"),
+                                  which(colnames(reduced_train) == "Num_Views_Base_mid_high"),
+                                  which(colnames(reduced_train) == "avg_growth_low"),
+                                  which(colnames(reduced_train) == "avg_growth_low_mid"),
+                                  which(colnames(reduced_train) == "avg_growth_mid_high"),
+                                  which(colnames(reduced_train) == "count_vids_low"),
+                                  which(colnames(reduced_train) == "count_vids_low_mid"),
+                                  which(colnames(reduced_train) == "count_vids_mid_high"),
+                                  which(colnames(reduced_train) == "num_chars"),
+                                  
+                                  which(colnames(reduced_train) == "cnn_35"),
+                                  which(colnames(reduced_train) == "cnn_37"),
+                                  which(colnames(reduced_train) == "sd_red"),
+                                  which(colnames(reduced_train) == "sd_green"),
+                                  which(colnames(reduced_train) == "sd_blue"),
+                                  which(colnames(reduced_train) == "cnn_0"),
+                                  which(colnames(reduced_train) == "cnn_20"),
+                                  which(colnames(reduced_train) == "cnn_36"),
+                                  which(colnames(reduced_train) == "cnn_65"),
+                                  which(colnames(reduced_train) == "num_uppercase_words"))]
+# Remove all Hogs
+reduced_train = reduced_train[,-c(which(colnames(reduced_train) ==
+                              "hog_0"):which(colnames(reduced_train) == "hog_863"))]
+reduced_train = reduced_train[,-index]
+
+ex = which(colnames(reduced_train) == "punc_num_!")
+fenge = which(colnames(reduced_train) == "punc_num_~")
+reduced_train[,ex] = apply(reduced_train[,ex:fenge],1,sum)
+reduced_train = reduced_train[,-c((ex+1):fenge)]
+
+names(reduced_train) <- make.names(names(reduced_train))
+recommended.mtry <- 16
+rf <- randomForest(growth_2_6 ~., data = reduced_train,
+                   mtry = recommended.mtry,
+                   ntree = 600, importance = TRUE)
+pred_rf_test = predict(rf, testing)
+
+bagging <- randomForest(growth_2_6 ~., data = reduced_train,
+                   mtry = 47,
+                   ntree = 600, importance = TRUE)
+
+pred_bagging_test = predict(bagging, testing)
+```
+
+# Generate CSV file
+
+```{r,eval=FALSE}
+result= data.frame("id" = c(7242:10346), "growth_2_6"= pred_bagging_test, row.names = NULL)
+result_csv = write.csv(result, file = "result.csv",row.names = FALSE)
+```
+
+# Exploratory Analysis (Graphics)
+```{r}
+ggplot(data = reduced_train,aes(x=avg_growth,y=growth_2_6))+
+  geom_boxplot(fill = c("pink","grey","grey","grey"))+
+  xlab("Average growth between 2-6 hours on this channel") +
+  ylab("Growth Rate between 2-6 hours")+
+  scale_x_discrete(labels= c("High","Low","Low-Mid","Mid-High"))
+ggplot(data = reduced_train,aes(x=Num_Views_Base,y=growth_2_6))+
+  geom_boxplot(fill = c("pink","grey","grey","grey"))+
+  xlab("Number of view base in the channel") +
+  ylab("Growth Rate between 2-6 hours")+
+  scale_x_discrete(labels= c("High","Low","Low-Mid","Mid-High"))
+ggplot(data = reduced_train,aes(x=dow,y=growth_2_6))+
+  geom_boxplot(fill = c("pink","grey","grey","grey","pink","pink","grey"))+
+  xlab("Date of the week") +
+  ylab("Growth Rate between 2-6 hours")+
+  scale_x_discrete(labels= c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+ggplot(data = reduced_train,aes(x=Duration,y=growth_2_6))+
+  geom_point(color = "black")+
+  geom_vline(xintercept = 800, color = "red", size=1.5)+
+  xlim(0,10000)+
+  xlab("Duration of the video") +
+  ylab("Growth Rate between 2-6 hours")
+ggplot(data = reduced_train,aes(x=num_uppercase_chars,y=growth_2_6))+
+  geom_point(color = "darkgrey")+
+  xlim(0,40)+
+  geom_vline(xintercept = c(0.8,17), color = "red", size=1)+
+  xlab("Number of uppercase characters") +
+  ylab("Growth Rate between 2-6 hours")
+```
